@@ -1,0 +1,12 @@
+# Python artifacts
+venv/
+__pycache__/
+*.py[cod]
+.env
+
+# Terraform local state and variable values
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log

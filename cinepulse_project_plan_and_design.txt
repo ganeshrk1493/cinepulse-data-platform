@@ -1,0 +1,238 @@
+================================================================================
+PROJECT ARCHITECTURE & IMPLEMENTATION SPECIFICATION
+================================================================================
+PROJECT NAME : CinePulse: Real-Time Movie & TV Hype vs. Rating Intelligence Platform
+INDUSTRY     : Entertainment / Media & Telemetry Analytics
+CORE STACK   : GCP (GCS, Pub/Sub, BigQuery, Dataflow), GKE, Terraform, Airflow, dbt, Looker Studio
+
+--------------------------------------------------------------------------------
+1. EXECUTIVE SUMMARY & PROBLEM STATEMENT
+--------------------------------------------------------------------------------
+In the entertainment industry, understanding audience reception in real time is 
+critical for marketing campaigns, content acquisition, and theatrical distribution. 
+Traditional rating aggregators (IMDb, Rotten Tomatoes, Metacritic) provide static, 
+lagging indicators of reception, whereas real-time social conversations (Reddit, 
+X/Twitter) reflect immediate organic buzz and sentiment volatility.
+
+CinePulse is an enterprise-grade, hybrid streaming/batch data platform designed to:
+  1. Stream and analyze real-time social media conversations (Reddit) regarding 
+     movies and television shows.
+  2. Ingest, decompress, and catalog authoritative industry metadata from IMDb 
+     datasets and TMDb (The Movie Database) APIs on a daily batch cadence.
+  3. Perform sentiment scoring and windowed comment velocity tracking via Apache Beam.
+  4. Transform and harmonize multi-source data inside BigQuery using dbt 
+     (Medallion Architecture: Bronze, Silver, Gold).
+  5. Serve aggregated analytical marts to Looker Studio to identify "Overhyped", 
+     "Underrated", and "Backlash Spike" titles in near real-time.
+
+--------------------------------------------------------------------------------
+2. HIGH-LEVEL ARCHITECTURAL DESIGN
+--------------------------------------------------------------------------------
+The architecture adopts a decoupled Lambda/Kappa-inspired pattern:
+
+[Reddit API (r/movies, r/boxoffice)]
+             | (Stream - REST/Websocket)
+             v
+  [Producer Service on GKE]
+             |
+             v
+    [GCP Pub/Sub Topic]
+             |
+             +---------------------------------------+
+             |                                       |
+             v                                       v
+ [Cloud Dataflow (Apache Beam)]             [Dead Letter Topic]
+   - Entity Keyword Extraction (Side Input)          |
+   - VADER Sentiment Polarity Scoring                v
+   - 10-Min Sliding/Fixed Windows            [DLQ GCS Storage]
+   - Write to Lake (GCS Archive)
+             |
+             +-----------------------+
+             |                       |
+             v                       v
+     [GCS Raw JSON Lake]     [BigQuery: Bronze Raw Reddit]
+                                     |
+[IMDb Daily TSVs + TMDb API]         |
+             |                       |
+             v (Batch Sync)          |
+   [Apache Airflow DAGs]             |
+             |                       |
+             v                       |
+    [GCS Staging Lake]               |
+             |                       |
+             v                       |
+  [BigQuery: Bronze Catalog]         |
+             |                       |
+             +-----------+-----------+
+                         |
+                         v
+                [dbt Transformations]
+                 - Silver: Staging, Deduplication, Dimensional Modeling
+                 - Gold: Analytical Marts, KPI Aggregations
+                         |
+                         v
+              [BigQuery: Gold Layer]
+                         |
+                         v
+             [Looker Studio Dashboard]
+
+--------------------------------------------------------------------------------
+3. TECH STACK SPECIFICATION & RESPONSIBILITIES
+--------------------------------------------------------------------------------
+* Infrastructure as Code (IaC):
+  - Tool: Terraform
+  - Scope: VPC network, GCS landing & cold-storage buckets, Pub/Sub topics/subscriptions,
+    BigQuery datasets/tables, GKE cluster, IAM service accounts, and least-privilege roles.
+
+* Ingestion Layer:
+  - Real-Time: Python producer using `praw` running in a containerized GKE pod, pushing
+    payloads into GCP Pub/Sub (`reddit-movie-stream`).
+  - Batch: Apache Airflow DAGs triggering daily extraction of IMDb dumps
+    (`title.basics.tsv.gz`, `title.ratings.tsv.gz`) and TMDb REST API trending endpoints.
+
+* Stream Processing & Telemetry Layer:
+  - Framework: Apache Beam (Python SDK)
+  - Execution Engine: Google Cloud Dataflow (DirectRunner for local, DataflowRunner for GCP)
+  - Operations:
+    a) Dead-Letter Queue (DLQ) routing for unparseable JSON payloads.
+    b) Side Input matching: Dynamic broadcast cache of tracked movie titles.
+    c) Sentiment Scoring DoFn: VADER / TextBlob polarity index (-1.00 to +1.00).
+    d) Fixed 10-Minute Windows for hype velocity aggregation.
+    e) Multi-sink output: Raw JSON archive in GCS + structured streaming inserts into BigQuery.
+
+* Warehouse & Storage Layer:
+  - Tool: Google Cloud Storage (GCS) + BigQuery
+  - Storage Design:
+    - GCS: `gs://cinepulse-raw-stream-archive/`, `gs://cinepulse-batch-staging/`
+    - BigQuery Medallion Architecture:
+      * `cinepulse_bronze`: Raw streaming logs, raw IMDb/TMDb staging tables.
+      * `cinepulse_silver`: Cleaned dimensions, deduplicated social fact tables.
+      * `cinepulse_gold`: Pre-aggregated analytics marts for Looker Studio.
+  - Performance: Partitioning by ingestion timestamp / date; Clustering by `movie_id`, `genre`.
+
+* Data Transformation & Modeling Layer:
+  - Framework: dbt (Data Build Tool) via `dbt-bigquery`
+  - Models:
+    - `dim_movies`: Merged canonical movie dimension (IMDb ID, TMDb ID, title, runtime, genres).
+    - `dim_ratings`: Historical rating trends and vote volumes.
+    - `fct_social_mentions`: Cleaned Reddit comments with polarity classifications.
+    - `mart_daily_movie_hype_index`: Daily volume, positive/negative ratios, average sentiment score.
+    - `mart_sentiment_vs_rating_discrepancy`: Cross-comparison between Reddit sentiment and IMDb ratings.
+
+* Orchestration Layer:
+  - Engine: Apache Airflow (Standalone Dockerized or KubernetesPodOperator on GKE)
+  - Workflows:
+    1. Daily Catalog Extraction (IMDb + TMDb -> GCS -> BigQuery Bronze).
+    2. Daily dbt transformation run + test assertions.
+
+* BI & Presentation Layer:
+  - Platform: Looker Studio (Direct DirectQuery connector to BigQuery Gold Marts).
+  - Deliverables: Interactive dashboard with sentiment scorecards, real-time hype velocity charts,
+    the "Discrepancy Matrix" scatter plot, and genre sentiment heatmaps.
+
+--------------------------------------------------------------------------------
+4. MEDALLION DATA SCHEMA DEFINITIONS
+--------------------------------------------------------------------------------
+A. BRONZE LAYER (Raw Ingestion):
+   1. `bronze_reddit_stream`:
+      - comment_id (STRING), post_id (STRING), subreddit (STRING),
+      - comment_body (STRING), author (STRING), score (INT64),
+      - created_utc (TIMESTAMP), ingestion_timestamp (TIMESTAMP),
+      - matched_title_id (STRING), sentiment_score (FLOAT64)
+   2. `bronze_imdb_titles`:
+      - tconst (STRING), titleType (STRING), primaryTitle (STRING),
+      - originalTitle (STRING), isAdult (INT64), startYear (STRING),
+      - runtimeMinutes (STRING), genres (STRING)
+   3. `bronze_imdb_ratings`:
+      - tconst (STRING), averageRating (FLOAT64), numVotes (INT64)
+   4. `bronze_tmdb_trending`:
+      - tmdb_id (INT64), title (STRING), popularity (FLOAT64),
+      - vote_average (FLOAT64), release_date (DATE), budget (INT64), revenue (INT64)
+
+B. SILVER LAYER (Cleansed & Conformed):
+   1. `dim_movies`:
+      - movie_id (STRING - canonical IMDb tconst),
+      - tmdb_id (INT64),
+      - primary_title (STRING),
+      - release_year (INT64),
+      - runtime_minutes (INT64),
+      - genre_array (ARRAY<STRING>),
+      - is_trending (BOOLEAN)
+   2. `dim_imdb_ratings`:
+      - movie_id (STRING),
+      - imdb_score (FLOAT64),
+      - total_votes (INT64),
+      - rating_tier (STRING - e.g., 'Blockbuster (8.0+)', 'Average (5.0-7.9)', 'Flop (<5.0)')
+   3. `fct_social_mentions`:
+      - comment_id (STRING),
+      - movie_id (STRING),
+      - comment_timestamp (TIMESTAMP),
+      - subreddit (STRING),
+      - comment_length (INT64),
+      - sentiment_score (FLOAT64),
+      - sentiment_class (STRING - 'POSITIVE', 'NEUTRAL', 'NEGATIVE'),
+      - engagement_score (INT64)
+
+C. GOLD LAYER (Business Intelligence Marts):
+   1. `mart_daily_movie_hype_index`:
+      - snapshot_date (DATE),
+      - movie_id (STRING),
+      - primary_title (STRING),
+      - total_mentions (INT64),
+      - positive_mention_count (INT64),
+      - negative_mention_count (INT64),
+      - avg_sentiment (FLOAT64),
+      - positive_ratio (FLOAT64)
+   2. `mart_sentiment_vs_rating_discrepancy`:
+      - movie_id (STRING),
+      - primary_title (STRING),
+      - release_year (INT64),
+      - genres (STRING),
+      - imdb_rating (FLOAT64),
+      - reddit_sentiment_score (FLOAT64),
+      - total_social_volume (INT64),
+      - discrepancy_category (STRING - 'Universal Hit', 'Cult Favorite', 'Overhyped/Backlash', 'Critical Flop')
+
+--------------------------------------------------------------------------------
+5. 4-WEEK IMPLEMENTATION PLAN (1 HOUR / DAY CADENCE)
+--------------------------------------------------------------------------------
+WEEK 1: INFRASTRUCTURE AS CODE & INGESTION SETUP
+- Day 01: GCP Project setup, Service Accounts, IAM, and Terraform initialization.
+- Day 02: Write Terraform scripts for GCS Buckets, Pub/Sub topics/subscriptions, and BigQuery datasets.
+- Day 03: Build Python Reddit stream producer using `praw` and test local message generation.
+- Day 04: Connect Reddit producer to GCP Pub/Sub; implement error handling and Dead-Letter logic.
+- Day 05: Build helper scripts for downloading/unzipping IMDb TSV dumps and TMDb API trending data.
+
+WEEK 2: STREAM PROCESSING (APACHE BEAM / DATAFLOW)
+- Day 06: Set up Apache Beam environment and test reading from Pub/Sub via DirectRunner.
+- Day 07: Implement entity recognition (movie title matching) and VADER sentiment scoring DoFn.
+- Day 08: Add 10-minute sliding/fixed windowing and write Dead-Letter Queue (DLQ) routing.
+- Day 09: Configure BigQuery dynamic table write streaming sink with proper error handling.
+- Day 10: Deploy pipeline to GCP Cloud Dataflow using DataflowRunner (validate end-to-end flow).
+
+WEEK 3: BATCH PIPELINES, ORCHESTRATION & dbt WAREHOUSING
+- Day 11: Set up local Apache Airflow via Docker Compose / lightweight environment.
+- Day 12: Build Airflow DAG for daily IMDb and TMDb extraction -> GCS -> BigQuery Bronze tables.
+- Day 13: Initialize dbt project; configure profiles.yml and build Bronze-to-Silver staging models.
+- Day 14: Build dbt Gold layer models (`mart_daily_movie_hype_index`, `mart_sentiment_vs_rating_discrepancy`).
+- Day 15: Implement dbt data quality tests (not_null, unique, accepted_values) and integrate dbt execution into Airflow.
+
+WEEK 4: CONTAINERIZATION, VISUALIZATION & PORTFOLIO WRAP-UP
+- Day 16: Dockerize Reddit stream producer and deploy as a pod on GKE (or GKE Autopilot).
+- Day 17: Optimize BigQuery partitioning and clustering strategies to ensure minimum query costs.
+- Day 18: Connect Looker Studio to BigQuery Gold Marts and build core KPI scorecards and trend charts.
+- Day 19: Build the "Discrepancy Matrix" scatter plot and genre sentiment comparison visualizers.
+- Day 20: Write repository documentation (README.md, architecture diagrams, runbooks) and execute teardown scripts.
+
+--------------------------------------------------------------------------------
+6. COST MANAGEMENT & GCP FREE TIER RUNBOOK
+--------------------------------------------------------------------------------
+To keep total project expenditure between $0 and $5:
+1. Google Cloud Storage: Uses standard tier (< 500 MB data volume); stays well within 5 GB free tier.
+2. Pub/Sub: Low message volume (< 10 MB/day); stays within the 10 GB monthly free allocation.
+3. BigQuery: Total queries and storage remain well under 1 TB/month and 10 GB storage limits.
+4. Cloud Dataflow: Never run 24/7. Run locally on DirectRunner during development. Deploy to GCP Dataflow
+   only for verification runs (30 mins at a time with n1-standard-1).
+5. GKE: Run GKE on Autopilot (free cluster management tier) or standard single spot node during deployment tests.
+6. Airflow: Run locally in Docker or container on demand; avoid expensive managed Cloud Composer.
+================================================================================

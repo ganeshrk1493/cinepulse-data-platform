@@ -1,0 +1,39 @@
+cd G:\Cine-pulse
+mkdir terraform
+cd terraform
+
+-- execution of terraform -- 
+create desired tf files in folder
+
+install terrafoprm in system 
+winget install HashiCorp.Terraform
+then 
+
+3. Step-by-Step Execution Guide
+Step A: Authenticate Your Machine to GCP
+Ensure your local terminal has GCP credentials ready for Terraform:
+
+DOS
+gcloud auth application-default login
+(This opens a browser window. Log in with your GCP account and click Allow.)
+
+Step B: Initialize Terraform
+Run init to download the Google provider plugins:
+
+DOS
+terraform init
+Expected Output: Terraform has been successfully initialized!
+
+Step C: Preview the Plan
+Run plan to verify what will be created without touching GCP yet:
+
+DOS
+terraform plan
+Expected Output: Plan: 5 to add, 0 to change, 0 to destroy. (1 GCS Bucket, 1 Pub/Sub Topic, 1 Subscription, 3 BigQuery Datasets).
+
+Step D: Apply & Provision
+Deploy the infrastructure to your GCP project:
+
+DOS
+terraform apply
+
