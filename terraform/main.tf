@@ -62,3 +62,36 @@ resource "google_bigquery_dataset" "gold" {
 
   delete_contents_on_destroy = true
 }
+
+# ------------------------------------------------------------------------------
+# 4. BIGQUERY BRONZE TABLES (EXTERNAL PARQUET TABLES)
+# ------------------------------------------------------------------------------
+resource "google_bigquery_table" "bronze_imdb_basics" {
+  dataset_id          = google_bigquery_dataset.bronze.dataset_id
+  table_id            = "raw_imdb_basics"
+  description         = "External table over IMDb title basics staged in GCS"
+  deletion_protection = false
+
+  external_data_configuration {
+    autodetect    = true
+    source_format = "PARQUET"
+    source_uris = [
+      "gs://${google_storage_bucket.data_lake.name}/raw/imdb/title_basics/title_basics.parquet"
+    ]
+  }
+}
+
+resource "google_bigquery_table" "bronze_imdb_ratings" {
+  dataset_id          = google_bigquery_dataset.bronze.dataset_id
+  table_id            = "raw_imdb_ratings"
+  description         = "External table over IMDb ratings staged in GCS"
+  deletion_protection = false
+
+  external_data_configuration {
+    autodetect    = true
+    source_format = "PARQUET"
+    source_uris = [
+      "gs://${google_storage_bucket.data_lake.name}/raw/imdb/title_ratings/title_ratings.parquet"
+    ]
+  }
+}
