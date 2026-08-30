@@ -6,6 +6,12 @@ terraform {
       version = "~> 6.0"
     }
   }
+
+  # REMOTE STATE BACKEND
+  backend "gcs" {
+    bucket = "cinepulse-tfstate-cinepulse-analytics"
+    prefix = "terraform/state"
+  }
 }
 
 provider "google" {
