@@ -1,0 +1,4 @@
+defaultProject: "cinepulse-analytics"
+defaultLocation: "US"
+defaultDataset: "cinepulse_silver"
+defaultAssertionDataset: "cinepulse_silver_assertions"

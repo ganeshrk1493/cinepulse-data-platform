@@ -1,0 +1,24 @@
+config {
+  type: "table",
+  schema: "cinepulse_silver",
+  description: "Conformed movie dimensions with parsed genres array and clean release years",
+  assertions: {
+    uniqueKey: ["movie_id"],
+    nonNull: ["movie_id", "primary_title"],
+    rowConditions: [
+      "release_year >= 2015"
+    ]
+  }
+}
+
+SELECT 
+    tconst AS movie_id,
+    primaryTitle AS primary_title,
+    originalTitle AS original_title,
+    SAFE_CAST(isAdult AS INT64) = 1 AS is_adult,
+    SAFE_CAST(startYear AS INT64) AS release_year,
+    SAFE_CAST(runtimeMinutes AS INT64) AS runtime_minutes,
+    SPLIT(genres, ',') AS genres
+FROM ${ref("raw_imdb_basics")}
+WHERE titleType = 'movie'
+  AND tconst IS NOT NULL

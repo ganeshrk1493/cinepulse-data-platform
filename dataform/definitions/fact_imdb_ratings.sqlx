@@ -1,0 +1,20 @@
+config {
+  type: "table",
+  schema: "cinepulse_silver",
+  description: "Aggregated IMDb ratings fact table with quality assertions",
+  assertions: {
+    uniqueKey: ["movie_id"],
+    nonNull: ["movie_id", "average_rating", "num_votes"],
+    rowConditions: [
+      "average_rating >= 0.0 AND average_rating <= 10.0",
+      "num_votes >= 0"
+    ]
+  }
+}
+
+SELECT
+    tconst AS movie_id,
+    SAFE_CAST(averageRating AS FLOAT64) AS average_rating,
+    SAFE_CAST(numVotes AS INT64) AS num_votes
+FROM ${ref("raw_imdb_ratings")}
+WHERE tconst IS NOT NULL
