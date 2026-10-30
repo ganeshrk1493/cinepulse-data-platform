@@ -1,0 +1,42 @@
+config {
+  type: "incremental",
+  schema: "cinepulse_silver",
+  uniqueKey: ["post_id"],
+  bigquery: {
+    partitionBy: "DATE(post_created_at)"
+  },
+  assertions: {
+    uniqueKey: ["post_id"],
+    nonNull: ["post_id", "post_created_at"]
+  },
+  description: "Deduplicated, sanitized staging model for streaming Reddit posts"
+}
+
+WITH raw_posts AS (
+  SELECT
+    post_id,
+    LOWER(TRIM(subreddit)) AS subreddit,
+    TRIM(post_title) AS post_title,
+    TRIM(body) AS body,
+    TRIM(author) AS author,
+    score,
+    SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', created_utc) AS parsed_created_at,
+    ingestion_timestamp
+  FROM
+    ${ref("bronze_reddit_posts")}
+  ${when(incremental(), `WHERE ingestion_timestamp > (SELECT MAX(ingestion_timestamp) FROM ${self()})`)}
+)
+
+SELECT
+  post_id,
+  subreddit,
+  post_title,
+  body,
+  author,
+  score,
+  COALESCE(parsed_created_at, ingestion_timestamp) AS post_created_at,
+  ingestion_timestamp
+FROM
+  raw_posts
+QUALIFY
+  ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY ingestion_timestamp DESC) = 1

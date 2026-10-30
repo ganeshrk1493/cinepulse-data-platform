@@ -1,0 +1,72 @@
+config {
+  type: "incremental",
+  schema: "cinepulse_silver",
+  uniqueKey: ["match_surrogate_key"],
+  bigquery: {
+    partitionBy: "DATE(post_created_at)"
+  },
+  assertions: {
+    uniqueKey: ["match_surrogate_key"],
+    nonNull: ["match_surrogate_key", "post_id", "movie_id"]
+  },
+  description: "Silver fact table linking incoming Reddit posts to matching IMDb movies"
+}
+
+WITH posts AS (
+  SELECT
+    post_id,
+    subreddit,
+    post_title,
+    body,
+    score,
+    post_created_at,
+    -- Normalize search text: lowercase and surround with single spaces for boundary matching
+    CONCAT(' ', LOWER(REGEXP_REPLACE(CONCAT(post_title, ' ', COALESCE(body, '')), r'[^a-zA-Z0-9\s]', ' ')), ' ') AS normalized_search_text
+  FROM
+    ${ref("stg_reddit_posts")}
+  ${when(incremental(), `WHERE post_created_at > (SELECT COALESCE(MAX(post_created_at), TIMESTAMP('1970-01-01')) FROM ${self()})`)}
+),
+
+catalog AS (
+  SELECT
+    movie_id,
+    primary_title,
+    -- Normalize movie titles by stripping punctuation/symbols
+    TRIM(LOWER(REGEXP_REPLACE(primary_title, r'[^a-zA-Z0-9\s]', ' '))) AS clean_title,
+    release_year
+  FROM
+    ${ref("dim_movies")}
+  WHERE
+    primary_title IS NOT NULL
+    AND LENGTH(primary_title) > 2
+),
+
+valid_catalog AS (
+  SELECT
+    movie_id,
+    primary_title,
+    clean_title,
+    release_year
+  FROM
+    catalog
+  WHERE
+    LENGTH(clean_title) > 2
+)
+
+SELECT
+  FARM_FINGERPRINT(CONCAT(p.post_id, '_', c.movie_id)) AS match_surrogate_key,
+  p.post_id,
+  c.movie_id,
+  c.primary_title AS matched_movie_title,
+  c.release_year AS movie_release_year,
+  p.subreddit,
+  p.post_title,
+  p.score,
+  p.post_created_at
+FROM
+  posts p
+CROSS JOIN
+  valid_catalog c
+WHERE
+  -- Exact word/phrase match surrounded by whitespace
+  STRPOS(p.normalized_search_text, CONCAT(' ', c.clean_title, ' ')) > 0
