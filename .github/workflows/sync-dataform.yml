@@ -1,0 +1,29 @@
+name: Sync Dataform to Dedicated Repo
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'dataform/**'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Monorepo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push subtree to dedicated repo
+        uses: cpina/github-action-push-to-another-repository@v1.7.2
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.SYNC_PAT }}
+        with:
+          source-directory: 'dataform'
+          destination-github-username: 'ganeshrk1493'
+          destination-repository-name: 'cinepulse-dataform'
+          user-email: 'ganeshrk1493@gmail.com'
+          commit-message: 'feat(dataform): sync from monorepo commit ${{ github.sha }}'
+          target-branch: 'main'
