@@ -68,5 +68,4 @@ FROM
 CROSS JOIN
   valid_catalog c
 WHERE
-  -- Exact word/phrase match surrounded by whitespace
   STRPOS(p.normalized_search_text, CONCAT(' ', c.clean_title, ' ')) > 0
