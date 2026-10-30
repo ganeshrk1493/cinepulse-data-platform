@@ -31,7 +31,7 @@ catalog AS (
   SELECT
     movie_id,
     primary_title,
-    -- Normalize movie titles by stripping punctuation/symbols/other characters
+    -- Normalize movie titles by stripping punctuation/symbols/other char
     TRIM(LOWER(REGEXP_REPLACE(primary_title, r'[^a-zA-Z0-9\s]', ' '))) AS clean_title,
     release_year
   FROM
