@@ -1,0 +1,82 @@
+name: Universal Dataflow Template Stager
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'dataflow_pipelines/**'
+  workflow_dispatch:
+
+jobs:
+  deploy-templates:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Fetches the previous commit so git diff works
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/604418713343/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'gh-dataflow-deployer@cinepulse-analytics.iam.gserviceaccount.com'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Base Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "apache-beam[gcp]==2.59.0"
+
+      - name: Detect Changed Pipelines and Deploy
+        run: |
+          # 1. Identify unique directories under dataflow_pipelines that changed
+          CHANGED_DIRS=$(git diff --name-only HEAD~1 HEAD | grep '^dataflow_pipelines/' | awk -F/ '{print $1"/"$2}' | sort -u)
+          
+          # If triggered manually via workflow_dispatch, CHANGED_DIRS might be empty; fall back to all folders with a pipeline.py
+          if [ -z "$CHANGED_DIRS" ]; then
+            echo "No git diff detected or manual trigger: scanning all subdirectories..."
+            CHANGED_DIRS=$(find dataflow_pipelines -mindepth 1 -maxdepth 1 -type d)
+          fi
+
+          echo "Target pipeline directories:"
+          echo "$CHANGED_DIRS"
+
+          # 2. Iterate and deploy each pipeline
+          for DIR in $CHANGED_DIRS; do
+            if [ -f "$DIR/pipeline.py" ]; then
+              PIPELINE_NAME=$(basename "$DIR")
+              echo "--------------------------------------------------------"
+              echo "Processing pipeline: $PIPELINE_NAME from directory: $DIR"
+              echo "--------------------------------------------------------"
+
+              # Install folder-specific requirements if they exist
+              if [ -f "$DIR/requirements.txt" ]; then
+                pip install -r "$DIR/requirements.txt"
+              fi
+
+              # Compile and stage the template to GCS
+              python "$DIR/pipeline.py" \
+                --runner=DataflowRunner \
+                --project=cinepulse-analytics \
+                --region=asia-south1 \
+                --staging_location=gs://cinepulse-dataflow-templates/staging \
+                --temp_location=gs://cinepulse-dataflow-templates/temp \
+                --template_location="gs://cinepulse-dataflow-templates/templates/${PIPELINE_NAME}"
+              
+              echo "Successfully staged template to: gs://cinepulse-dataflow-templates/templates/${PIPELINE_NAME}"
+            else
+              echo "Skipping $DIR: No pipeline.py found."
+            fi
+          done
