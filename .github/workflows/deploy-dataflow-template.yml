@@ -20,7 +20,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2 # Fetches the previous commit so git diff works
+          fetch-depth: 2
 
       - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
@@ -32,7 +32,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install Base Dependencies
         run: |
@@ -44,7 +43,7 @@ jobs:
           # 1. Identify unique directories under dataflow_pipelines that changed
           CHANGED_DIRS=$(git diff --name-only HEAD~1 HEAD | grep '^dataflow_pipelines/' | awk -F/ '{print $1"/"$2}' | sort -u)
           
-          # If triggered manually via workflow_dispatch, CHANGED_DIRS might be empty; fall back to all folders with a pipeline.py
+          # If triggered manually via workflow_dispatch, scan all subdirectories
           if [ -z "$CHANGED_DIRS" ]; then
             echo "No git diff detected or manual trigger: scanning all subdirectories..."
             CHANGED_DIRS=$(find dataflow_pipelines -mindepth 1 -maxdepth 1 -type d)
