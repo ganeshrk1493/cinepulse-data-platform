@@ -7,7 +7,7 @@ from apache_beam.io.gcp.bigquery import BigQueryDisposition, WriteToBigQuery
 
 TAG_CLEAN = "clean_records"
 TAG_DLQ = "dlq_records"
-
+#Comment
 class IngestionPipelineOptions(PipelineOptions):
     @classmethod
     def _add_argparse_args(cls, parser):
